@@ -58,6 +58,14 @@ def init_db():
         # No default categories anymore as per user request
         cursor.execute('INSERT INTO settings (key, value) VALUES ("initialized", "true")')
     
+    # Create default admin user 'skpark' if no users exist
+    cursor.execute('SELECT COUNT(*) FROM users')
+    if cursor.fetchone()[0] == 0:
+        # Default password for skpark is '1234'
+        cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', 
+                       ("skpark", hash_password("1234")))
+        print("Default admin user 'skpark' created (password: 1234)")
+
     conn.commit()
     conn.close()
 

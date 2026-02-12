@@ -45,11 +45,10 @@ if not st.session_state.logged_in:
     </div>
     """, unsafe_allow_html=True)
     
-    auth_tab1, auth_tab2 = st.tabs(["로그인", "회원가입"])
-    
-    with auth_tab1:
+    # Remove tabs, only Login
+    with st.container():
+        st.subheader("로그인")
         with st.form("login_form"):
-            st.subheader("로그인")
             login_un = st.text_input("아이디")
             login_pw = st.text_input("비밀번호", type="password")
             if st.form_submit_button("로그인"):
@@ -60,24 +59,6 @@ if not st.session_state.logged_in:
                     st.rerun()
                 else:
                     st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
-    
-    with auth_tab2:
-        with st.form("register_form"):
-            st.subheader("새 계정 만들기")
-            reg_un = st.text_input("새 아이디")
-            reg_pw = st.text_input("새 비밀번호", type="password")
-            reg_pw_confirm = st.text_input("비밀번호 확인", type="password")
-            if st.form_submit_button("회원가입"):
-                if reg_un and reg_pw:
-                    if reg_pw == reg_pw_confirm:
-                        if db.register_user(reg_un, reg_pw):
-                            st.success("회원가입이 완료되었습니다! 로그인을 해주세요.")
-                        else:
-                            st.error("이미 존재하는 아이디입니다.")
-                    else:
-                        st.error("비밀번호가 일치하지 않습니다.")
-                else:
-                    st.error("아이디와 비밀번호를 모두 입력해 주세요.")
     st.stop()
 
 # --- Main Application Area (Authenticated) ---
@@ -87,7 +68,11 @@ if st.sidebar.button("로그아웃"):
     logout_user()
 
 st.sidebar.divider()
-menu = st.sidebar.selectbox("메뉴 선택", ["대시보드", "물품 관리", "보관 장소 설정", "알림 센터", "계정 설정"])
+menu_options = ["대시보드", "물품 관리", "보관 장소 설정", "알림 센터"]
+if st.session_state.username == "skpark":
+    menu_options.append("회원 관리")
+
+menu = st.sidebar.selectbox("메뉴 선택", menu_options)
 
 # Helper: Get all items with location info
 def get_all_items_with_info():
@@ -355,19 +340,53 @@ elif menu == "알림 센터":
     else:
         st.success("유통기한이 임박한 물품이 없습니다. 편안한 하루 되세요! 😊")
 
-elif menu == "계정 설정":
-    st.title("⚙️ 계정 설정")
-    st.markdown(f"**현재 로그인 계정:** {st.session_state.username}")
+elif menu == "회원 관리":
+    st.title("👥 회원 관리 (관리자 전용)")
     
-    st.divider()
-    st.subheader("⚠️ 계정 탈퇴")
-    st.warning("계정을 삭제하더라도 등록하신 보관장소와 물품 정보는 공유 데이터로 남게 됩니다.")
-    
-    confirm_un = st.text_input("탈퇴를 진행하시려면 아이디를 입력하세요")
-    if st.button("계정 삭제"):
-        if confirm_un == st.session_state.username:
-            db.delete_user(st.session_state.user_id)
-            st.success("계정이 삭제되었습니다. 이용해 주셔서 감사합니다.")
-            logout_user()
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("새 회원 등록")
+        with st.form("admin_register_form"):
+            reg_un = st.text_input("새 아이디")
+            reg_pw = st.text_input("새 비밀번호", type="password")
+            reg_pw_confirm = st.text_input("비밀번호 확인", type="password")
+            
+            if st.form_submit_button("회원 등록"):
+                if reg_un and reg_pw:
+                    if reg_pw == reg_pw_confirm:
+                        if db.register_user(reg_un, reg_pw):
+                            st.success(f"'{reg_un}' 계정이 생성되었습니다.")
+                            st.rerun()
+                        else:
+                            st.error("이미 존재하는 아이디입니다.")
+                    else:
+                        st.error("비밀번호가 일치하지 않습니다.")
+                else:
+                    st.error("모든 필드를 입력해 주세요.")
+                    
+    with col2:
+        st.subheader("회원 목록 및 삭제")
+        users = db.get_all_users()
+        if users:
+            user_df = pd.DataFrame(users, columns=['ID', 'Username'])
+            st.dataframe(user_df[['Username']], use_container_width=True)
+            
+            st.divider()
+            st.write("🗑️ 회원 삭제")
+            
+            # Deletion UI
+            del_user_id = st.selectbox("삭제할 회원 선택", options=user_df['ID'].tolist(), 
+                                     format_func=lambda x: user_df[user_df['ID']==x]['Username'].iloc[0])
+            
+            if st.button("선택한 회원 삭제"):
+                selected_username = user_df[user_df['ID']==del_user_id]['Username'].iloc[0]
+                if selected_username == "skpark":
+                    st.error("관리자 계정(skpark)은 삭제할 수 없습니다.")
+                elif selected_username == st.session_state.username:
+                    st.error("현재 로그인된 계정은 삭제할 수 없습니다.")
+                else:
+                    db.delete_user(del_user_id)
+                    st.success(f"'{selected_username}' 계정이 삭제되었습니다.")
+                    st.rerun()
         else:
-            st.error("입력하신 아이디가 일치하지 않습니다.")
+            st.info("등록된 회원이 없습니다.")
