@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime
 import os
 import hashlib
+import pandas as pd
 
 DB_PATH = 'mycatalog.db'
 
@@ -214,3 +215,65 @@ def get_all_users():
 if __name__ == "__main__":
     init_db()
     print("Database initialized.")
+
+# Data Management (Export/Import)
+def export_all_data():
+    conn = get_connection()
+    # Get Locations
+    loc_df = pd.read_sql_query("SELECT * FROM locations", conn)
+    # Get Items
+    item_df = pd.read_sql_query("SELECT * FROM items", conn)
+    conn.close()
+    return loc_df, item_df
+
+def import_locations(loc_df):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # Clear existing locations
+        cursor.execute("DELETE FROM locations")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='locations'")
+        
+        if not loc_df.empty:
+            loc_data = loc_df.to_dict('records')
+            cursor.executemany(
+                'INSERT INTO locations (id, name, category, parent_id, is_food) VALUES (:id, :name, :category, :parent_id, :is_food)',
+                loc_data
+            )
+            
+        conn.commit()
+        return True, "보관장소 데이터 가져오기 성공! (기존 데이터는 삭제되었습니다)"
+    except Exception as e:
+        conn.rollback()
+        return False, f"보관장소 데이터 가져오기 실패: {str(e)}"
+    finally:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.close()
+
+def import_items(item_df):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # Clear existing items
+        cursor.execute("DELETE FROM items")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='items'")
+        
+        if not item_df.empty:
+            item_data = item_df.to_dict('records')
+            cursor.executemany(
+                'INSERT INTO items (id, name, purchase_date, expiry_date, quantity, notes, location_id) VALUES (:id, :name, :purchase_date, :expiry_date, :quantity, :notes, :location_id)',
+                item_data
+            )
+            
+        conn.commit()
+        return True, "물품 데이터 가져오기 성공! (기존 데이터는 삭제되었습니다)"
+    except Exception as e:
+        conn.rollback()
+        return False, f"물품 데이터 가져오기 실패: {str(e)}"
+    finally:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.close()

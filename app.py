@@ -71,6 +71,7 @@ st.sidebar.divider()
 menu_options = ["대시보드", "물품 관리", "보관 장소 설정", "알림 센터"]
 if st.session_state.username == "skpark":
     menu_options.append("회원 관리")
+    menu_options.append("데이터 관리")
 
 menu = st.sidebar.selectbox("메뉴 선택", menu_options)
 
@@ -448,3 +449,106 @@ elif menu == "회원 관리":
                     st.rerun()
         else:
             st.info("등록된 회원이 없습니다.")
+
+elif menu == "데이터 관리":
+    st.title("💾 데이터 관리 (관리자 전용)")
+    
+    tab1, tab2 = st.tabs(["데이터 내보내기 (Export)", "데이터 가져오기 (Import)"])
+    
+    with tab1:
+        st.subheader("Excel 파일로 다운로드")
+        st.info("현재 등록된 모든 보관장소와 물품 데이터를 Excel 파일로 저장합니다.")
+        
+        if st.button("데이터 조회 및 변환"):
+            loc_df, item_df = db.export_all_data()
+            
+            c1, c2 = st.columns(2)
+            with c1:
+                st.write(f"**보관장소 데이터** ({len(loc_df)}건)")
+                st.dataframe(loc_df.head(), use_container_width=True)
+                
+                # Convert to CSV/Excel
+                # Streamlit's download button needs binary data
+                # Using CSV for simplicity or Excel if openpyxl available
+                # Let's use CSV as it's safer without extra binary deps sometimes, but user asked for Excel.
+                # using .to_csv().encode('utf-8') is easiest. 
+                # For Excel:
+                try:
+                    import io
+                    buffer_loc = io.BytesIO()
+                    with pd.ExcelWriter(buffer_loc, engine='openpyxl') as writer:
+                        loc_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        label="📥 보관장소(locations) 다운로드",
+                        data=buffer_loc.getvalue(),
+                        file_name="mycatalog_locations.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except ImportError:
+                    st.error("openpyxl 라이브러리가 설치되지 않아 Excel 생성이 불가능합니다.")
+
+            with c2:
+                st.write(f"**물품 데이터** ({len(item_df)}건)")
+                st.dataframe(item_df.head(), use_container_width=True)
+                
+                try:
+                    import io
+                    buffer_item = io.BytesIO()
+                    with pd.ExcelWriter(buffer_item, engine='openpyxl') as writer:
+                        item_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        label="📥 물품(items) 다운로드",
+                        data=buffer_item.getvalue(),
+                        file_name="mycatalog_items.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                except ImportError:
+                    pass
+
+    with tab2:
+        st.subheader("Excel 파일 업로드 (데이터 교체)")
+        st.warning("⚠️ 주의: 데이터를 업로드하면 **해당 항목의 기존 데이터가 모두 삭제**되고 업로드한 데이터로 대체됩니다. 복구할 수 없으니 신중하게 진행해 주세요.")
+        
+        c1, c2 = st.columns(2)
+        
+        with c1:
+            st.markdown("### 1. 보관장소 (Locations)")
+            uploaded_loc = st.file_uploader("locations.xlsx 파일 선택", type=['xlsx'], key="upload_loc")
+            if uploaded_loc:
+                if st.button("🚀 보관장소 데이터 덮어쓰기", type="primary"):
+                    try:
+                        new_loc_df = pd.read_excel(uploaded_loc)
+                        req_loc_cols = {'name', 'category'}
+                        if not req_loc_cols.issubset(new_loc_df.columns):
+                            st.error(f"필수 컬럼 누락: {req_loc_cols - set(new_loc_df.columns)}")
+                        else:
+                            success, msg = db.import_locations(new_loc_df)
+                            if success:
+                                st.success(msg)
+                                st.balloons()
+                            else:
+                                st.error(msg)
+                    except Exception as e:
+                        st.error(f"오류: {e}")
+            
+        with c2:
+            st.markdown("### 2. 물품 (Items)")
+            uploaded_item = st.file_uploader("items.xlsx 파일 선택", type=['xlsx'], key="upload_item")
+            if uploaded_item:
+                if st.button("🚀 물품 데이터 덮어쓰기", type="primary"):
+                    try:
+                        new_item_df = pd.read_excel(uploaded_item)
+                        req_item_cols = {'name', 'quantity'}
+                        if not req_item_cols.issubset(new_item_df.columns):
+                            st.error(f"필수 컬럼 누락: {req_item_cols - set(new_item_df.columns)}")
+                        else:
+                            success, msg = db.import_items(new_item_df)
+                            if success:
+                                st.success(msg)
+                                st.balloons()
+                            else:
+                                st.error(msg)
+                    except Exception as e:
+                        st.error(f"오류: {e}")
