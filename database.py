@@ -31,9 +31,17 @@ def init_db():
         name TEXT NOT NULL,
         category TEXT NOT NULL, -- 대분류 (냉장실, 냉동실, 팬트리 등)
         parent_id INTEGER,
+        is_food BOOLEAN DEFAULT 0, -- 식료품 보관 장소 여부
         FOREIGN KEY (parent_id) REFERENCES locations (id)
     )
     ''')
+    
+    # Check if is_food column exists (Migration for existing DB)
+    cursor.execute("PRAGMA table_info(locations)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if 'is_food' not in columns:
+        cursor.execute('ALTER TABLE locations ADD COLUMN is_food BOOLEAN DEFAULT 0')
+        print("Migrated: Added 'is_food' column to locations table.")
     
     # Items table
     cursor.execute('''
@@ -70,10 +78,10 @@ def init_db():
     conn.close()
 
 # Location CRUD
-def add_location(name, category, parent_id=None):
+def add_location(name, category, parent_id=None, is_food=False):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO locations (name, category, parent_id) VALUES (?, ?, ?)', (name, category, parent_id))
+    cursor.execute('INSERT INTO locations (name, category, parent_id, is_food) VALUES (?, ?, ?, ?)', (name, category, parent_id, is_food))
     conn.commit()
     conn.close()
 
@@ -84,6 +92,13 @@ def get_locations():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def update_location(location_id, name, category, is_food):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE locations SET name=?, category=?, is_food=? WHERE id=?', (name, category, is_food, location_id))
+    conn.commit()
+    conn.close()
 
 def delete_location_safely(location_id):
     conn = get_connection()
@@ -149,6 +164,14 @@ def get_expiry_alerts():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def get_location_by_id(loc_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM locations WHERE id = ?', (loc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
 
 # User Auth Functions
 def register_user(username, password):

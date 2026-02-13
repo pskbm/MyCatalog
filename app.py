@@ -110,83 +110,112 @@ if menu == "대시보드":
         today = datetime.now().date()
         df['expiry_date'] = pd.to_datetime(df['expiry_date']).dt.date
         
-        expired = df[df['expiry_date'] < today]
-        imminent = df[(df['expiry_date'] >= today) & (df['expiry_date'] <= today + pd.Timedelta(days=7))]
-        
-        # Top Stats
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            render_metric_card("전체 물품", len(df), "#764ba2", "📦")
-        with col2:
-            render_metric_card("유통기한 경과", len(expired), "#e74c3c", "⚠️")
-        with col3:
-            render_metric_card("7일 이내 만료", len(imminent), "#f39c12", "⏰")
-            
-        st.divider()
-        
-        # Category breakdown
-        st.subheader("📍 보관 장소별 현황")
-        categories = df['category'].unique()
-        cols = st.columns(len(categories))
-        for i, cat in enumerate(categories):
-            cat_items = df[df['category'] == cat]
-            cat_expired = len(cat_items[cat_items['expiry_date'] < today])
-            cat_total = len(cat_items)
-            with cols[i]:
-                st.markdown(f"""
-                <div class="stCard">
-                    <h3>{cat}</h3>
-                    <p style="font-size: 1.5rem; font-weight:700;">{cat_total}개</p>
-                    <p style="color:red; font-size: 0.9rem;">만료: {cat_expired}개</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
+    st.title("📊 대시보드")
+    
+    # ... (Rest of Dashboard code remains mostly same, just ensuring data consistency)
+    items = get_all_items_with_info() 
+    # Use the local function
+    
+    total_items = len(items)
+    
+    # Calculate expiry statuses
+    today = datetime.now().date()
+    expired_count = 0
+    imminent_count = 0
+    
+    if not items.empty:
+        for index, row in items.iterrows():
+            exp_date = datetime.strptime(row['expiry_date'], '%Y-%m-%d').date()
+            diff = (exp_date - today).days
+            if diff < 0:
+                expired_count += 1
+            elif diff <= 7:
+                imminent_count += 1
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        render_metric_card("전체 물품", total_items, "#764ba2", "📦")
+    with col2:
+        render_metric_card("유통기한 경과", expired_count, "#e74c3c", "⚠️")
+    with col3:
+        render_metric_card("7일 이내 만료", imminent_count, "#f39c12", "⏰")
+    
+    st.divider()
+    
+    if not items.empty:
+        st.subheader("📦 카테고리별 현황")
+        cat_counts = items['category'].value_counts()
+        st.bar_chart(cat_counts)
+
         # List of imminent/expired items
-        if not imminent.empty or not expired.empty:
-            st.subheader("🔔 주의가 필요한 물품")
-            alert_df = pd.concat([expired, imminent])
+        st.subheader("🔔 주의가 필요한 물품")
+        items['expiry_date_dt'] = pd.to_datetime(items['expiry_date']).dt.date
+        expired_df = items[items['expiry_date_dt'] < today]
+        imminent_df = items[(items['expiry_date_dt'] >= today) & (items['expiry_date_dt'] <= today + pd.Timedelta(days=7))]
+        
+        if not imminent_df.empty or not expired_df.empty:
+            alert_df = pd.concat([expired_df, imminent_df])
             st.dataframe(alert_df[["name", "expiry_date", "location_name", "category"]].sort_values("expiry_date"), use_container_width=True)
+        else:
+            st.info("유통기한이 임박하거나 만료된 물품이 없습니다.")
     else:
         st.info("등록된 물품이 없습니다. '물품 관리' 메뉴에서 물품을 등록해 보세요!")
 
 elif menu == "물품 관리":
-    st.title("📋 물품 관리")
+    st.title("📦 물품 등록 및 관리")
     
-    # Registration tab, View/Edit tab
-    tab1, tab2 = st.tabs(["물품 등록", "전체 목록"])
+    tab1, tab2 = st.tabs(["물품 등록", "전체 목록 및 수정"])
     
     with tab1:
         st.subheader("새 물품 등록")
+        
+        # Location Selection Moved OUTSIDE the form to trigger rerun
+        locations = db.get_locations()
+        if locations:
+            # loc tuple: (id, name, category, parent_id, is_food)
+            loc_options = {f"[{loc[2]}] {loc[1]} {'🍎' if len(loc)>4 and loc[4] else ''}": loc for loc in locations}
+            selected_loc_label = st.selectbox("보관 장소 선택", list(loc_options.keys()))
+            selected_loc = loc_options[selected_loc_label]
+            location_id = selected_loc[0]
+            is_food_loc = selected_loc[4] if len(selected_loc) > 4 else 0
+        else:
+            st.warning("등록된 보관 장소가 없습니다. '보관 장소 설정'에서 장소를 먼저 등록해 주세요.")
+            location_id = None
+            is_food_loc = 0
+
+        # Dynamic Default Expiry Calculation
+        if is_food_loc:
+            default_expiry = datetime.today() + pd.DateOffset(days=15)
+            help_text = "식료품 보관 장소이므로 기본값이 15일 후로 설정되었습니다."
+        else:
+            default_expiry = datetime.today() + pd.DateOffset(years=10)
+            help_text = "일반 보관 장소이므로 기본값이 10년 후로 설정되었습니다."
+
         with st.form("add_item_form"):
+            name = st.text_input("📦 품목명")
+            
             col1, col2 = st.columns(2)
             with col1:
-                name = st.text_input("📦 품목명")
                 quantity = st.number_input("수량", min_value=1.0, step=0.5, value=1.0)
                 purchase_date = st.date_input("구매 일자", value=datetime.today())
             with col2:
-                # Default expiry date: 10 years later
-                default_expiry = datetime.today() + pd.DateOffset(years=10)
-                expiry_date = st.date_input("유통기한", value=default_expiry)
-                locations = db.get_locations()
-                if locations:
-                    loc_options = {f"[{loc[2]}] {loc[1]}": loc[0] for loc in locations}
-                    location_label = st.selectbox("보관 장소", options=list(loc_options.keys()))
-                    location_id = loc_options[location_label]
+                # Use key to force re-render when location changes
+                # But we also need to allow user to change it manually without it resetting on every slight interaction if we used a random key.
+                # Using location_id in key means it only resets when location changes. Perfect.
+                expiry_date = st.date_input("유통기한", value=default_expiry, help=help_text, key=f"expiry_input_{location_id}")
+            
+            notes = st.text_area("참고사항")
+            
+            if st.form_submit_button("등록"):
+                if name:
+                    if location_id:
+                        db.add_item(name, purchase_date.isoformat(), expiry_date.isoformat(), quantity, notes, location_id)
+                        st.success(f"'{name}' 등록 완료!")
+                        st.balloons()
+                    else:
+                        st.error("보관 장소를 선택해 주세요.")
                 else:
-                    st.warning("먼저 '보관 장소 설정'에서 장소를 등록해 주세요.")
-                    location_id = None
-                notes = st.text_area("참고사항")
-                
-            submit = st.form_submit_button("등록하기")
-            if submit:
-                if name and location_id:
-                    db.add_item(name, purchase_date.isoformat(), expiry_date.isoformat(), quantity, notes, location_id)
-                    st.success(f"'{name}' 등록 완료!")
-                    st.balloons()
-                elif not name:
                     st.error("품목명을 입력해 주세요.")
-                else:
-                    st.error("보관 장소를 선택해 주세요.")
 
     with tab2:
         df = get_all_items_with_info()
@@ -194,7 +223,6 @@ elif menu == "물품 관리":
             # 1. Category Filter at the top
             st.subheader("🕵️ 카테고리별 필터링")
             categories = sorted(df['category'].unique())
-            # Default to "기타" if it exists, otherwise the first one
             default_cat_idx = categories.index("기타") if "기타" in categories else 0
             selected_cat = st.selectbox("조회할 대분류 선택", options=categories, index=default_cat_idx)
             
@@ -205,7 +233,7 @@ elif menu == "물품 관리":
             
             st.markdown("---")
             
-            # 3. Item Selection for Edit/Delete from the filtered list
+            # 3. Item Selection for Edit/Delete
             if not filtered_df.empty:
                 st.subheader("📝 물품 수정 및 삭제")
                 selected_item_id = st.selectbox(
@@ -216,24 +244,25 @@ elif menu == "물품 관리":
                 item_data = filtered_df[filtered_df['id'] == selected_item_id].iloc[0]
                 
                 with st.form(f"edit_form_{selected_item_id}"):
+                    u_name = st.text_input("품목명", value=item_data['name'])
+                    
+                    # Update Location options in Edit
+                    locs_edit = db.get_locations()
+                    loc_edit_options = {f"[{l[2]}] {l[1]}": l[0] for l in locs_edit}
+                    
+                    current_loc_label = next((k for k, v in loc_edit_options.items() if v == item_data['location_id']), None)
+                    u_loc_label = st.selectbox(
+                        "보관 장소 변경", 
+                        options=list(loc_edit_options.keys()), 
+                        index=list(loc_edit_options.keys()).index(current_loc_label) if current_loc_label and current_loc_label in loc_edit_options else 0
+                    )
+                    u_loc_id = loc_edit_options[u_loc_label] if loc_edit_options else None
+                    
                     col1, col2 = st.columns(2)
                     with col1:
-                        u_name = st.text_input("품목명", value=item_data['name'])
                         u_qty = st.number_input("수량", value=float(item_data['quantity']), step=0.5)
                     with col2:
                         u_expiry = st.date_input("유통기한", value=pd.to_datetime(item_data['expiry_date']).date())
-                        # Get locations for re-assignment
-                        locs_edit = db.get_locations()
-                        loc_edit_options = {f"[{l[2]}] {l[1]}": l[0] for l in locs_edit}
-                        # Current location label
-                        current_loc_label = next((k for k, v in loc_edit_options.items() if v == item_data['location_id']), None)
-                        
-                        u_loc_label = st.selectbox(
-                            "보관 장소 변경", 
-                            options=list(loc_edit_options.keys()), 
-                            index=list(loc_edit_options.keys()).index(current_loc_label) if current_loc_label and current_loc_label in loc_edit_options else 0
-                        )
-                        u_loc_id = loc_edit_options[u_loc_label] if loc_edit_options else None
                     
                     u_notes = st.text_area("참고사항", value=item_data['notes'])
                     
@@ -256,8 +285,9 @@ elif menu == "물품 관리":
 elif menu == "보관 장소 설정":
     st.title("⚙️ 보관 장소 관리")
     
-    col1, col2 = st.columns(2)
-    with col1:
+    tab_loc1, tab_loc2 = st.tabs(["장소 등록", "장소 수정/삭제"])
+    
+    with tab_loc1:
         st.subheader("새 장소 등록")
         with st.form("add_loc_form"):
             new_loc_name = st.text_input("장소 이름 (예: 냉장실, 거실 서랍 등)")
@@ -273,39 +303,67 @@ elif menu == "보관 장소 설정":
             if selected_cat == "직접 입력":
                 custom_cat = st.text_input("새 대분류명 입력")
             
+            is_food_check = st.checkbox("식료품 보관 장소인가요?", help="체크 시 이 장소에 물품 등록 시 유통기한 기본값이 15일로 설정됩니다.")
+            
             if st.form_submit_button("장소 등록"):
                 if new_loc_name:
-                    # Logic: If select name-same, use name. If direct, use custom. Else use selected.
                     final_cat = new_loc_name
                     if selected_cat == "직접 입력":
                         final_cat = custom_cat if custom_cat else new_loc_name
                     elif selected_cat != "(장소 이름과 동일)":
                         final_cat = selected_cat
                     
-                    db.add_location(new_loc_name, final_cat, None)
+                    db.add_location(new_loc_name, final_cat, None, is_food_check)
                     st.success(f"'{new_loc_name}' ({final_cat}) 등록 완료!")
                     st.rerun()
                 else:
                     st.error("장소 이름을 입력해 주세요.")
     
-    with col2:
+    with tab_loc2:
         st.subheader("등록된 장소 관리")
         locs = db.get_locations()
         if locs:
-            loc_df = pd.DataFrame(locs, columns=['id', 'name', 'category', 'parent_id'])
-            st.table(loc_df[['category', 'name']])
+            # Prepare DataFrame
+            # loc: id, name, category, parent_id, is_food
+            loc_data = []
+            for l in locs:
+                is_food_val = l[4] if len(l) > 4 else 0
+                loc_data.append({
+                    "id": l[0],
+                    "name": l[1],
+                    "category": l[2],
+                    "is_food": "✅" if is_food_val else "-"
+                })
+            
+            loc_df = pd.DataFrame(loc_data)
+            st.dataframe(loc_df[['category', 'name', 'is_food']], use_container_width=True)
             
             st.divider()
-            st.write("🗑️ 장소 삭제")
-            # Filter out top-level category placeholders if they are fixed, 
-            # but here they are just normal locations.
-            del_loc_id = st.selectbox("삭제할 장소 선택", options=loc_df['id'].tolist(), 
+            
+            # Edit/Delete Section
+            selected_loc_id = st.selectbox("관리할 장소 선택", options=loc_df['id'].tolist(), 
                                       format_func=lambda x: f"[{loc_df[loc_df['id']==x]['category'].iloc[0]}] {loc_df[loc_df['id']==x]['name'].iloc[0]}")
             
-            if st.button("선택한 장소 삭제"):
-                db.delete_location_safely(del_loc_id)
-                st.warning(f"장소가 삭제되었습니다. 해당 장소의 물품은 '없음(대분류 최상위)'으로 변경되었습니다.")
-                st.rerun()
+            loc_to_edit = db.get_location_by_id(selected_loc_id)
+            # loc_to_edit: tuple (id, name, cat, parent, is_food)
+            
+            with st.form("edit_loc_form"):
+                st.markdown(f"**'{loc_to_edit[1]}'** 수정 중")
+                u_loc_name = st.text_input("장소 이름", value=loc_to_edit[1])
+                u_loc_cat = st.text_input("대분류", value=loc_to_edit[2]) 
+                u_is_food = st.checkbox("식료품 보관 장소", value=bool(loc_to_edit[4]) if len(loc_to_edit)>4 else False)
+                
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.form_submit_button("수정 저장"):
+                        db.update_location(selected_loc_id, u_loc_name, u_loc_cat, u_is_food)
+                        st.success("장소 정보가 수정되었습니다.")
+                        st.rerun()
+                with c2:
+                    if st.form_submit_button("🗑️ 장소 삭제"):
+                        db.delete_location_safely(selected_loc_id)
+                        st.warning("장소가 삭제되었습니다.")
+                        st.rerun()
         else:
             st.info("등록된 장소가 없습니다.")
 
