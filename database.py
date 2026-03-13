@@ -2,6 +2,7 @@ import sqlite3
 from datetime import datetime
 import os
 import hashlib
+import pandas as pd
 
 DB_PATH = 'mycatalog.db'
 
@@ -31,9 +32,17 @@ def init_db():
         name TEXT NOT NULL,
         category TEXT NOT NULL, -- 대분류 (냉장실, 냉동실, 팬트리 등)
         parent_id INTEGER,
+        is_food BOOLEAN DEFAULT 0, -- 식료품 보관 장소 여부
         FOREIGN KEY (parent_id) REFERENCES locations (id)
     )
     ''')
+    
+    # Check if is_food column exists (Migration for existing DB)
+    cursor.execute("PRAGMA table_info(locations)")
+    columns = [info[1] for info in cursor.fetchall()]
+    if 'is_food' not in columns:
+        cursor.execute('ALTER TABLE locations ADD COLUMN is_food BOOLEAN DEFAULT 0')
+        print("Migrated: Added 'is_food' column to locations table.")
     
     # Items table
     cursor.execute('''
@@ -49,6 +58,25 @@ def init_db():
     )
     ''')
     
+    # Receipts table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS receipts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id INTEGER,
+        store_name TEXT NOT NULL,
+        store_address TEXT,
+        card_type TEXT,
+        card_number TEXT,
+        use_date DATETIME,
+        sales_amount REAL DEFAULT 0,
+        vat REAL DEFAULT 0,
+        total_amount REAL DEFAULT 0,
+        notes TEXT,
+        image_path TEXT,
+        FOREIGN KEY (category_id) REFERENCES locations (id)
+    )
+    ''')
+    
     # Settings table to track initialization
     cursor.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)')
     
@@ -58,14 +86,22 @@ def init_db():
         # No default categories anymore as per user request
         cursor.execute('INSERT INTO settings (key, value) VALUES ("initialized", "true")')
     
+    # Create default admin user 'skpark' if no users exist
+    cursor.execute('SELECT COUNT(*) FROM users')
+    if cursor.fetchone()[0] == 0:
+        # Default password for skpark is '1234'
+        cursor.execute('INSERT INTO users (username, password_hash) VALUES (?, ?)', 
+                       ("skpark", hash_password("1234")))
+        print("Default admin user 'skpark' created (password: 1234)")
+
     conn.commit()
     conn.close()
 
 # Location CRUD
-def add_location(name, category, parent_id=None):
+def add_location(name, category, parent_id=None, is_food=False):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO locations (name, category, parent_id) VALUES (?, ?, ?)', (name, category, parent_id))
+    cursor.execute('INSERT INTO locations (name, category, parent_id, is_food) VALUES (?, ?, ?, ?)', (name, category, parent_id, is_food))
     conn.commit()
     conn.close()
 
@@ -76,6 +112,13 @@ def get_locations():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def update_location(location_id, name, category, is_food):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE locations SET name=?, category=?, is_food=? WHERE id=?', (name, category, is_food, location_id))
+    conn.commit()
+    conn.close()
 
 def delete_location_safely(location_id):
     conn = get_connection()
@@ -142,6 +185,54 @@ def get_expiry_alerts():
     conn.close()
     return rows
 
+def get_location_by_id(loc_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM locations WHERE id = ?', (loc_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+# Receipt CRUD
+def add_receipt(category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+    INSERT INTO receipts (category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path))
+    conn.commit()
+    conn.close()
+
+def get_receipts(category_id=None):
+    conn = get_connection()
+    cursor = conn.cursor()
+    if category_id:
+        cursor.execute('SELECT * FROM receipts WHERE category_id = ?', (category_id,))
+    else:
+        cursor.execute('SELECT * FROM receipts')
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+def update_receipt(receipt_id, category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+    UPDATE receipts 
+    SET category_id=?, store_name=?, store_address=?, card_type=?, card_number=?, use_date=?, sales_amount=?, vat=?, total_amount=?, notes=?, image_path=?
+    WHERE id=?
+    ''', (category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path, receipt_id))
+    conn.commit()
+    conn.close()
+
+def delete_receipt(receipt_id):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM receipts WHERE id = ?', (receipt_id,))
+    conn.commit()
+    conn.close()
+
 # User Auth Functions
 def register_user(username, password):
     conn = get_connection()
@@ -183,3 +274,96 @@ def get_all_users():
 if __name__ == "__main__":
     init_db()
     print("Database initialized.")
+
+# Data Management (Export/Import)
+def export_all_data():
+    conn = get_connection()
+    # Get Locations
+    loc_df = pd.read_sql_query("SELECT * FROM locations", conn)
+    # Get Items
+    item_df = pd.read_sql_query("SELECT * FROM items", conn)
+    # Get Receipts
+    receipt_df = pd.read_sql_query("SELECT * FROM receipts", conn)
+    conn.close()
+    return loc_df, item_df, receipt_df
+
+def import_locations(loc_df):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # Clear existing locations
+        cursor.execute("DELETE FROM locations")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='locations'")
+        
+        if not loc_df.empty:
+            loc_data = loc_df.to_dict('records')
+            cursor.executemany(
+                'INSERT INTO locations (id, name, category, parent_id, is_food) VALUES (:id, :name, :category, :parent_id, :is_food)',
+                loc_data
+            )
+            
+        conn.commit()
+        return True, "카테고리 데이터 가져오기 성공! (기존 데이터는 삭제되었습니다)"
+    except Exception as e:
+        conn.rollback()
+        return False, f"카테고리 데이터 가져오기 실패: {str(e)}"
+    finally:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.close()
+
+def import_items(item_df):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # Clear existing items
+        cursor.execute("DELETE FROM items")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='items'")
+        
+        if not item_df.empty:
+            item_data = item_df.to_dict('records')
+            cursor.executemany(
+                'INSERT INTO items (id, name, purchase_date, expiry_date, quantity, notes, location_id) VALUES (:id, :name, :purchase_date, :expiry_date, :quantity, :notes, :location_id)',
+                item_data
+            )
+            
+        conn.commit()
+        return True, "물품 데이터 가져오기 성공! (기존 데이터는 삭제되었습니다)"
+    except Exception as e:
+        conn.rollback()
+        return False, f"물품 데이터 가져오기 실패: {str(e)}"
+    finally:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.close()
+
+def import_receipts(receipt_df):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        
+        # Clear existing receipts
+        cursor.execute("DELETE FROM receipts")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='receipts'")
+        
+        if not receipt_df.empty:
+            # fillna to avoid errors with NULL values in SQLite
+            receipt_df = receipt_df.where(pd.notnull(receipt_df), None)
+            receipt_data = receipt_df.to_dict('records')
+            cursor.executemany(
+                '''INSERT INTO receipts (id, category_id, store_name, store_address, card_type, card_number, use_date, sales_amount, vat, total_amount, notes, image_path) 
+                   VALUES (:id, :category_id, :store_name, :store_address, :card_type, :card_number, :use_date, :sales_amount, :vat, :total_amount, :notes, :image_path)''',
+                receipt_data
+            )
+            
+        conn.commit()
+        return True, "영수증 데이터 가져오기 성공! (기존 데이터는 삭제되었습니다)"
+    except Exception as e:
+        conn.rollback()
+        return False, f"영수증 데이터 가져오기 실패: {str(e)}"
+    finally:
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.close()
