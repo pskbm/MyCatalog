@@ -391,12 +391,22 @@ elif menu == "영수증 관리":
             category_id = None
             
         st.markdown("---")
-        st.write("이미지를 업로드하거나 직접 수기 입력할 수 있습니다.")
-        uploaded_image = st.file_uploader("영수증 이미지 (JPG 필수)", type=['jpg', 'jpeg'], key="receipt_upload")
+        st.write("이미지를 업로드하거나 직접 촬영하여 등록할 수 있습니다.")
+        
+        input_tab1, input_tab2 = st.tabs(["📁 파일 업로드", "📷 카메라 촬영"])
+        
+        with input_tab1:
+            uploaded_file = st.file_uploader("영수증 이미지 (JPG)", type=['jpg', 'jpeg'], key="receipt_upload_file")
+        
+        with input_tab2:
+            camera_file = st.camera_input("영수증 촬영", key="receipt_camera_input")
+            
+        # Combine inputs: Prefer camera if both exist, or use whichever is provided
+        uploaded_image = camera_file if camera_file is not None else uploaded_file
         
         image_path = None
         if uploaded_image is not None:
-            st.image(uploaded_image, caption="업로드된 영수증", use_container_width=True)
+            st.image(uploaded_image, caption="선택된 영수증 이미지", use_container_width=True)
             # Save the image
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"receipt_{timestamp}.jpg"
